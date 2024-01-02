@@ -50,4 +50,5 @@ public class Provider {
     public int hashCode() {
         return Objects.hash(getId(), getType(), getAddress());
     }
+
 }
