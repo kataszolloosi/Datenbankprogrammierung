@@ -8,7 +8,7 @@ import java.util.Objects;
 public class Appointment {
     @Id @GeneratedValue
     private Integer id;
-    @ManyToOne
+    @ManyToOne  //OneToOne @JoinColumn(name = "CUSTOMER_EMAIL")
     private Customer customer;
     @ManyToOne
     private Provider provider;

@@ -8,11 +8,10 @@ import java.util.Objects;
 public class Provider {
     @Id @GeneratedValue
     private Integer id;
-    @Column(nullable = false)
     private ProviderType type;
     private String address;
-    @OneToMany(mappedBy = "provider", cascade = CascadeType.ALL)
-    private final List<Appointment> appointments = new ArrayList<>();
+    @OneToMany(mappedBy = "provider", cascade = CascadeType.ALL, orphanRemoval = true)
+    private List<Appointment> appointments = new ArrayList<>();
 
     public Integer getId() {
         return id;

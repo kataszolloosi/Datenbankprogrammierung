@@ -1,16 +1,13 @@
 package at.campus02.dbp2.assignment;
 
-import org.apache.derby.iapi.store.raw.log.Logger;
-
 import javax.persistence.EntityManager;
 import javax.persistence.EntityManagerFactory;
 import javax.persistence.TypedQuery;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-public class AppointmentRepositoryFactory implements AppointmentRepository{
+public class AppointmentRepositoryFactory implements AppointmentRepository {
 
     private final EntityManager manager;
     public static AppointmentRepositoryFactory repository;
@@ -35,13 +32,13 @@ public class AppointmentRepositoryFactory implements AppointmentRepository{
         manager.persist(customer);
         manager.getTransaction().commit();
         return true;
-
     }
 
     @Override
     public Customer read(String email) {
         if (email == null)
             return null;
+
         return manager.find(Customer.class, email);
     }
 
@@ -62,23 +59,22 @@ public class AppointmentRepositoryFactory implements AppointmentRepository{
     public boolean delete(Customer customer) {
         if (customer == null)
             return false;
-        if (read(customer.getEmail()) == null) {
-            throw new IllegalArgumentException("Customer does not exist, cannot delete!");
+
+        if (read(customer.getEmail()) == null)
+            throw new IllegalArgumentException("Cannot find Customer");
+
+        List<Appointment> customerAppointments = getAppointmentsFor(customer);
+        for (Appointment a : customerAppointments) {
+            a.setCustomer(null);
+            manager.getTransaction().begin();
+            manager.merge(a);
+            manager.getTransaction().commit();
         }
+
         manager.getTransaction().begin();
-        customer = manager.merge(customer);
-
-        // Retrieve the appointments associated with the customer
-        List<Appointment> appointments = getAppointmentsFor(customer);
-
-        // Remove references from appointments
-        for (Appointment appointment : appointments) {
-            appointment.setCustomer(null);
-            manager.merge(appointment);
-        }
-
-        manager.remove(customer);
+        manager.remove(manager.merge(customer));
         manager.getTransaction().commit();
+
         return true;
     }
 
@@ -110,18 +106,32 @@ public class AppointmentRepositoryFactory implements AppointmentRepository{
 
     @Override
     public Provider update(Provider provider) {
-        if (provider == null)
+        if (provider == null) {
             return null;
-        if (read(provider.getId()) == null) {
+        }
+        if (provider.getId() == null || read(provider.getId()) == null) {
             throw new IllegalArgumentException("Provider does not exist, cannot update!");
         }
-
         manager.getTransaction().begin();
+        List<Appointment> appListUpdated = provider.getAppointments();
+        for (int i = 0; i < appListUpdated.size() - 1; i++) {
+            for (int j = i + 1; j < appListUpdated.size(); j++) {
+                if (appListUpdated.get(i) == appListUpdated.get(j))
+                    appListUpdated.remove(appListUpdated.get(j));
+            }
+        }
+        for (Appointment a : appListUpdated) {
+            List<Appointment> appListDB = read(provider.getId()).getAppointments();
+            if (!appListDB.contains(a)) {
+                manager.persist(a);
+            }
+        }
+        manager.clear();
         Provider managed = manager.merge(provider);
         manager.getTransaction().commit();
+
         return managed;
     }
-
 
 
     @Override
@@ -134,6 +144,7 @@ public class AppointmentRepositoryFactory implements AppointmentRepository{
         manager.getTransaction().begin();
         manager.remove(manager.merge(provider));
         manager.getTransaction().commit();
+
         return true;
     }
 
@@ -151,10 +162,10 @@ public class AppointmentRepositoryFactory implements AppointmentRepository{
             return query.getResultList();
         }
 
-        // Adjusted code to handle the case where both lastname and firstname are provided
         if (lastname != null && firstname != null) {
             TypedQuery<Customer> query = manager.createQuery(
-                    "SELECT c FROM Customer c WHERE UPPER(c.lastname) LIKE UPPER(:lastname) AND UPPER(c.firstname) LIKE UPPER(:firstname)",
+                    "select c from Customer c where upper(c.lastname) like upper(:lastname) " +
+                            "and upper(c.firstname) like upper(:firstname)",
                     Customer.class
             );
             query.setParameter("lastname", "%" + lastname + "%");
@@ -190,12 +201,13 @@ public class AppointmentRepositoryFactory implements AppointmentRepository{
 
         TypedQuery<Appointment> query = manager.createQuery(
                 "select a from Appointment a " +
-                        "where lower(a.provider.address) like lower(:addressPart) ",
-                //+ "and a.time is not null ",
+                        "where lower(a.provider.address) like lower(:addressPart) " +
+                        "and a.customer is null ",
                 Appointment.class
         );
 
         query.setParameter("addressPart", "%" + addressPart + "%");
+
         return query.getResultList();
     }
 
@@ -210,63 +222,80 @@ public class AppointmentRepositoryFactory implements AppointmentRepository{
 
         TypedQuery<Appointment> query = manager.createQuery(
                 "select a from Appointment a " +
-                        "where a.time >= :from and a.time <= :to ",
+                        "where a.time >= :from and a.time <= :to and a.customer is null",
                 Appointment.class
         );
 
         query.setParameter("from", from);
         query.setParameter("to", to);
 
-
         return query.getResultList();
     }
+
     @Override
     public List<Appointment> getAppointmentsFor(Customer customer) {
         if (customer == null || customer.getEmail() == null || customer.getEmail().isEmpty()) {
             return Collections.emptyList();
         }
 
-        TypedQuery<Appointment> query = manager.createQuery("SELECT a FROM Appointment a WHERE a.customer = :customer", Appointment.class);
+        TypedQuery<Appointment> query = manager.createQuery("select a from Appointment a where a.customer = :customer",
+                Appointment.class);
         query.setParameter("customer", customer);
+
         return query.getResultList();
     }
 
     @Override
     public boolean reserve(Appointment appointment, Customer customer) {
-        if (customer == null || customer.getEmail() == null || customer.getEmail().isEmpty()
-                || appointment == null) {
+        if (customer == null || appointment == null) {
             return false;
         }
-
-        if (!manager.contains(appointment)) {
+        if (customer.getEmail() == null) {
             return false;
         }
+        if (read(customer.getEmail()) == null) {
+            return false;
+        }
+        if (appointment.getCustomer() != null) {
+            return false;
+        }
+        if (appointment.getProvider() == null) {
+            return false;
+        } else
+            appointment.setCustomer(customer);
 
-        TypedQuery<Customer> customerQuery = manager.createQuery(
-                "select c from Customer c where c.email = :customerEmail",
-                Customer.class
-        );
-        customerQuery.setParameter("customerEmail", customer.getEmail());
+        manager.getTransaction().begin();
+        manager.merge(appointment);
+        manager.getTransaction().commit();
+
         return true;
     }
 
     @Override
     public boolean cancel(Appointment appointment, Customer customer) {
-        if (customer == null || customer.getEmail() == null || customer.getEmail().isEmpty() || appointment == null) {
+        if (customer == null || appointment == null) {
             return false;
         }
-
-        // Check if the appointment exists
-        if (!manager.contains(appointment)) {
+        if (customer.getEmail() == null) {
             return false;
         }
+        if (read(customer.getEmail()) == null) {
+            return false;
+        }
+        if (appointment.getCustomer() == null) {
+            return false;
+        }
+        if (appointment.getCustomer() != customer) {
+            return false;
+        }
+        if (appointment.getProvider() == null) {
+            return false;
+        } else
+            appointment.setCustomer(null);
+        manager.getTransaction().begin();
+        manager.merge(appointment);
+        manager.getTransaction().commit();
 
-        // Find the customer by email
-        TypedQuery<Customer> customerQuery = manager.createQuery(
-                "select c from Customer c where c.email = :customerEmail",
-                Customer.class
-        );
-        customerQuery.setParameter("customerEmail", customer.getEmail());
         return true;
     }
 
@@ -276,6 +305,4 @@ public class AppointmentRepositoryFactory implements AppointmentRepository{
             manager.close();
         }
     }
-
-
 }
